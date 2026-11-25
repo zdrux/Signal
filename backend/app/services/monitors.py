@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 import re
@@ -280,10 +281,33 @@ def run_cert_monitor_check(session: Session, monitor: CertMonitor) -> dict:
     }
 
 
+def _run_url_check_isolated(monitor_id: int) -> None:
+    with Session(engine) as session:
+        m = session.get(UrlMonitor, monitor_id)
+        if m and m.enabled:
+            try:
+                run_url_monitor_check(session, m)
+            except Exception as exc:
+                print(f"URL monitor {monitor_id} error: {exc}")
+
+
+def _run_cert_check_isolated(monitor_id: int) -> None:
+    with Session(engine) as session:
+        cm = session.get(CertMonitor, monitor_id)
+        if cm and cm.enabled:
+            try:
+                run_cert_monitor_check(session, cm)
+            except Exception as exc:
+                print(f"Cert monitor {monitor_id} error: {exc}")
+
+
 def _tick_due_monitors() -> None:
-    """Synchronous sweep executed in a worker thread to run any due URL/Cert monitors + daily DB prune."""
+    """Collect due monitor IDs quickly, then run network checks concurrently without holding a DB lock."""
     global _LAST_AUTO_PRUNE
     now = datetime.now(timezone.utc)
+    due_url_ids: list[int] = []
+    due_cert_ids: list[int] = []
+
     with Session(engine) as session:
         if _LAST_AUTO_PRUNE is None or (now - _LAST_AUTO_PRUNE) >= timedelta(hours=24):
             try:
@@ -292,23 +316,27 @@ def _tick_due_monitors() -> None:
             except Exception as exc:
                 print(f"Auto-prune skipped: {exc}")
 
-        url_monitors = session.exec(select(UrlMonitor).where(UrlMonitor.enabled == True)).all()  # noqa: E712
-        for m in url_monitors:
+        for m in session.exec(select(UrlMonitor).where(UrlMonitor.enabled == True)).all():  # noqa: E712
             last = _as_utc(m.last_checked_at)
             if last is None or (now - last).total_seconds() >= max(30, m.interval_seconds):
-                try:
-                    run_url_monitor_check(session, m)
-                except Exception as exc:
-                    print(f"URL monitor {m.id} error: {exc}")
+                due_url_ids.append(m.id)
 
-        cert_monitors = session.exec(select(CertMonitor).where(CertMonitor.enabled == True)).all()  # noqa: E712
-        for cm in cert_monitors:
+        for cm in session.exec(select(CertMonitor).where(CertMonitor.enabled == True)).all():  # noqa: E712
             last = _as_utc(cm.last_checked_at)
             if last is None or (now - last).total_seconds() >= max(60, cm.interval_seconds):
-                try:
-                    run_cert_monitor_check(session, cm)
-                except Exception as exc:
-                    print(f"Cert monitor {cm.id} error: {exc}")
+                due_cert_ids.append(cm.id)
+
+    if not due_url_ids and not due_cert_ids:
+        return
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_run_url_check_isolated, mid) for mid in due_url_ids]
+        futures += [pool.submit(_run_cert_check_isolated, cid) for cid in due_cert_ids]
+        for fut in futures:
+            try:
+                fut.result()
+            except Exception as exc:
+                print(f"Monitor worker error: {exc}")
 
 
 async def monitor_scheduler_loop(stop_event: asyncio.Event) -> None:

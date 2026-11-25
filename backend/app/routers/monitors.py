@@ -105,9 +105,8 @@ def create_url_monitor(
             raise HTTPException(status_code=400, detail=f"Invalid regex pattern: {exc}")
     headers_json = _validate_headers_json(payload.headers_json)
 
-    created = []
-    for u in raw_urls:
-        monitor = UrlMonitor(
+    monitors = [
+        UrlMonitor(
             app_id=app_id,
             name=payload.name.strip() if len(raw_urls) == 1 else "",
             url=u,
@@ -125,11 +124,13 @@ def create_url_monitor(
             enabled=True,
             created_by=actor.username,
         )
-        session.add(monitor)
-        session.flush()
-        created.append({"id": monitor.id, "url": monitor.url})
-
+        for u in raw_urls
+    ]
+    session.add_all(monitors)
     session.commit()
+    for m in monitors:
+        session.refresh(m)
+    created = [{"id": m.id, "url": m.url} for m in monitors]
     if len(created) == 1:
         record_audit(session, actor.username, "URL_MONITOR_CREATED", target=f"{app.name} (MAP {app.map_id}) · {created[0]['url']}")
     else:
@@ -286,9 +287,8 @@ def create_cert_monitors_batch(
     if not cleaned_urls:
         raise HTTPException(status_code=400, detail="Provide at least one valid URL or hostname")
 
-    created = []
-    for u in cleaned_urls:
-        cm = CertMonitor(
+    monitors = [
+        CertMonitor(
             app_id=app_id,
             url=u,
             days_before_expiry=max(1, payload.days_before_expiry),
@@ -296,11 +296,13 @@ def create_cert_monitors_batch(
             enabled=True,
             created_by=actor.username,
         )
-        session.add(cm)
-        session.flush()
-        created.append({"id": cm.id, "url": cm.url})
-
+        for u in cleaned_urls
+    ]
+    session.add_all(monitors)
     session.commit()
+    for cm in monitors:
+        session.refresh(cm)
+    created = [{"id": cm.id, "url": cm.url} for cm in monitors]
     record_audit(
         session,
         actor.username,

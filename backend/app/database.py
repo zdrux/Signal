@@ -8,7 +8,7 @@ if DATABASE_URL.startswith("sqlite:///"):
     if db_file and db_file != ":memory:":
         Path(db_file).parent.mkdir(parents=True, exist_ok=True)
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
 
@@ -16,6 +16,7 @@ def create_db_and_tables() -> None:
     if DATABASE_URL.startswith("sqlite"):
         with engine.connect() as conn:
             conn.execute(text("PRAGMA journal_mode=WAL;"))
+            conn.execute(text("PRAGMA busy_timeout=15000;"))
             conn.execute(text("PRAGMA foreign_keys=ON;"))
             conn.commit()
     SQLModel.metadata.create_all(engine)
