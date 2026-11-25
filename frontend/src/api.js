@@ -98,4 +98,7 @@ export const api = {
     request('/api/admin/settings/retention', { method: 'PUT', body: JSON.stringify(body) }),
   pruneDatabase: () => request('/api/admin/database/prune', { method: 'POST' }),
   listAudit: () => request('/api/admin/audit'),
+  getDlpRules: () => request('/api/admin/dlp/rules'),
+  testDlpText: (text) =>
+    request('/api/admin/dlp/test', { method: 'POST', body: JSON.stringify({ text }) }),
 };

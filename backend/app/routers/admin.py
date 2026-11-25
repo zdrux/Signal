@@ -8,6 +8,7 @@ from app.dependencies import admin_required
 from app.models import User, AuditLog
 from app.services.config_store import get_all_config, set_config_values
 from app.services.audit import record_audit
+from app.services.dlp import get_dlp_rules_metadata, inspect_redaction
 from app.services.maintenance import get_database_stats, prune_old_records
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -246,3 +247,17 @@ def list_audit_logs(limit: int = 100, session: Session = Depends(get_session), _
         }
         for r in rows
     ]
+
+
+class DlpTestRequest(BaseModel):
+    text: str = ""
+
+
+@router.get("/dlp/rules")
+def list_dlp_rules(_: User = Depends(admin_required)):
+    return {"rules": get_dlp_rules_metadata()}
+
+
+@router.post("/dlp/test")
+def test_dlp_redaction(payload: DlpTestRequest, _: User = Depends(admin_required)):
+    return inspect_redaction(payload.text)

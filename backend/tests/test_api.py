@@ -255,15 +255,57 @@ def test_direct_apps_alertmanager_dedupe_and_flood_protection():
         assert tok_res.status_code == 200
         assert tok_res.json()["bearer_token"] == prod["bearer_token"]
 
-        # DLP redacts SSN, Bearer token, password=..., and emails from SMS
+        # DLP redacts PII, cards, tokens, passwords, connection strings, URLs, IPs, and server names
         from app.services.dlp import redact_sensitive_text
         redacted = redact_sensitive_text(
-            "User john@bank.com SSN 123-45-6789 password=SuperSecret123 Bearer abc123xyz"
+            "User john@bank.com phone 416-555-0199 SSN 123-45-6789 SIN 123-456-789 "
+            "card 4532-0151-1283-0366 password=SuperSecret123 Bearer abc123xyz "
+            "ghp_1234567890abcdefghij123456 server=prod-db-01.corp.internal "
+            "host prd-app02 10.24.8.15 https://console.apps.ocp4.cibc.com/login "
+            "postgres://admin:p@ss@db01.internal:5432/prod"
         )
-        assert "123-45-6789" not in redacted
-        assert "SuperSecret123" not in redacted
-        assert "john@bank.com" not in redacted
-        assert "abc123xyz" not in redacted
+        for leaked in [
+            "john@bank.com",
+            "416-555-0199",
+            "123-45-6789",
+            "123-456-789",
+            "4532-0151-1283-0366",
+            "SuperSecret123",
+            "abc123xyz",
+            "ghp_1234567890abcdefghij123456",
+            "prod-db-01.corp.internal",
+            "prd-app02",
+            "10.24.8.15",
+            "console.apps.ocp4.cibc.com",
+            "postgres://admin",
+        ]:
+            assert leaked not in redacted, f"Expected {leaked!r} to be redacted in: {redacted}"
+
+        # Safe operational metadata (app name, MAP ID, error codes, HTTP codes) is preserved
+        safe_msg = redact_sensitive_text(
+            "[Signal] [CRITICAL] Payment Clearing (MAP 40218) | ERR_MQ_99: Queue full HTTP 503"
+        )
+        assert "Payment Clearing" in safe_msg
+        assert "MAP 40218" in safe_msg
+        assert "ERR_MQ_99" in safe_msg
+        assert "HTTP 503" in safe_msg
+
+        # Admin DLP rules & live redaction test endpoints
+        rules_res = client.get("/api/admin/dlp/rules")
+        assert rules_res.status_code == 200
+        assert len(rules_res.json()["rules"]) >= 20
+
+        test_res = client.post(
+            "/api/admin/dlp/test",
+            json={"text": "Contact jane@bank.com on server=prod-db-01.corp.internal card 4532-0151-1283-0366"},
+        )
+        assert test_res.status_code == 200
+        body = test_res.json()
+        assert body["changed"] is True
+        assert body["total_redactions"] >= 3
+        assert "jane@bank.com" not in body["redacted"]
+        assert "prod-db-01.corp.internal" not in body["redacted"]
+        assert "4532-0151-1283-0366" not in body["redacted"]
 
         # EST active-hours schedule helper (daytime & overnight)
         from app.routers.webhooks import is_contact_within_est_window

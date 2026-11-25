@@ -68,8 +68,13 @@ def send_twilio_sms(session: Session, to_number: str, body: str) -> TwilioSendRe
             error_message="Configure TWILIO_MESSAGING_SERVICE_SID or TWILIO_FROM_NUMBER",
         )
 
+    # Defense-in-depth: always run DLP redaction right before Twilio API dispatch
+    safe_body = redact_sensitive_text(body)
+    if len(safe_body) > MAX_SMS_LENGTH:
+        safe_body = safe_body[: MAX_SMS_LENGTH - 3] + "..."
+
     url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
-    form_data = {"To": to_number, "Body": body}
+    form_data = {"To": to_number, "Body": safe_body}
     if messaging_service_sid:
         form_data["MessagingServiceSid"] = messaging_service_sid
     else:

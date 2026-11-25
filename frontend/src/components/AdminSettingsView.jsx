@@ -1,6 +1,30 @@
 import React, { useEffect, useState } from 'react';
-import { Shield, Server, MessageSquare, FileText, Search, CheckCircle2, Database, Trash2, Link2 } from 'lucide-react';
+import { Shield, Server, MessageSquare, FileText, Search, CheckCircle2, Database, Trash2, Link2, EyeOff, FlaskConical, Sparkles, X } from 'lucide-react';
 import { api } from '../api';
+
+const DLP_SAMPLE_TEXT =
+  'Alert on server=prod-db-01.corp.internal (10.24.8.15) host prd-app02: ' +
+  'User jane.doe@bank.com phone +1-416-555-0199 SSN 123-45-6789 SIN 123-456-789 ' +
+  'card 4532-0151-1283-0366 failed auth with password=SuperSecret123 ' +
+  'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.signature123 ' +
+  'at https://console.apps.ocp4.cibc.com/login (postgres://admin:pass@db01.internal:5432/prod)';
+
+function renderHighlightedRedacted(text) {
+  if (!text) return null;
+  const parts = text.split(/(\[REDACTED(?:_[A-Z_]+)?\])/g);
+  return parts.map((part, idx) =>
+    /^\[REDACTED(?:_[A-Z_]+)?\]$/.test(part) ? (
+      <span
+        key={idx}
+        className="inline-block px-1 py-0.5 mx-0.5 rounded bg-amber-500/20 border border-amber-500/35 text-amber-300 font-mono text-[11px]"
+      >
+        {part}
+      </span>
+    ) : (
+      <React.Fragment key={idx}>{part}</React.Fragment>
+    )
+  );
+}
 
 function formatBytes(bytes) {
   if (!bytes) return '0 B';
@@ -19,6 +43,14 @@ export default function AdminSettingsView({ onToast, onSettingsChanged }) {
   const [retention, setRetention] = useState({ EVENT_RETENTION_DAYS: 90, AUDIT_RETENTION_DAYS: 365 });
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
   const [pruning, setPruning] = useState(false);
+
+  // DLP rules & live tester state
+  const [dlpRules, setDlpRules] = useState([]);
+  const [dlpCategory, setDlpCategory] = useState('All');
+  const [dlpSearch, setDlpSearch] = useState('');
+  const [dlpInput, setDlpInput] = useState('');
+  const [dlpResult, setDlpResult] = useState(null);
+  const [dlpTesting, setDlpTesting] = useState(false);
 
   const [ldap, setLdap] = useState({
     LDAP_ENABLED: false,
@@ -40,16 +72,18 @@ export default function AdminSettingsView({ onToast, onSettingsChanged }) {
 
   async function loadAll() {
     try {
-      const [u, s, a, db] = await Promise.all([
+      const [u, s, a, db, dlp] = await Promise.all([
         api.listUsers(),
         api.getSettings(),
         api.listAudit(),
         api.getDatabaseInfo(),
+        api.getDlpRules(),
       ]);
       setUsers(u);
       setSettings(s);
       setAudit(a);
       setDbInfo(db);
+      setDlpRules(dlp.rules || []);
       setRetention({
         EVENT_RETENTION_DAYS: db.event_retention_days,
         AUDIT_RETENTION_DAYS: db.audit_retention_days,
@@ -148,6 +182,23 @@ export default function AdminSettingsView({ onToast, onSettingsChanged }) {
     }
   }
 
+  async function handleRunDlpTest(textOverride) {
+    const sample = textOverride !== undefined ? textOverride : dlpInput;
+    if (!sample.trim()) {
+      setDlpResult(null);
+      return;
+    }
+    setDlpTesting(true);
+    try {
+      const res = await api.testDlpText(sample);
+      setDlpResult(res);
+    } catch (err) {
+      onToast(err.message, true);
+    } finally {
+      setDlpTesting(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
@@ -156,6 +207,7 @@ export default function AdminSettingsView({ onToast, onSettingsChanged }) {
           { id: 'general', label: 'Base URL', icon: Link2 },
           { id: 'twilio', label: 'Twilio SMS', icon: MessageSquare },
           { id: 'ldap', label: 'LDAPS Auth', icon: Server },
+          { id: 'dlp', label: 'DLP & Redaction', icon: EyeOff },
           { id: 'database', label: 'Database & Retention', icon: Database },
           { id: 'audit', label: 'Audit Log', icon: FileText },
         ].map((t) => {
@@ -464,6 +516,257 @@ export default function AdminSettingsView({ onToast, onSettingsChanged }) {
           </button>
         </form>
       )}
+
+      {/* DLP & REDACTION */}
+      {subTab === 'dlp' && (() => {
+        const categories = ['All', 'Secrets & Tokens', 'PII & Financial', 'Servers & Network'];
+        const countsByCat = {
+          All: dlpRules.length,
+          'Secrets & Tokens': dlpRules.filter((r) => r.category === 'Secrets & Tokens').length,
+          'PII & Financial': dlpRules.filter((r) => r.category === 'PII & Financial').length,
+          'Servers & Network': dlpRules.filter((r) => r.category === 'Servers & Network').length,
+        };
+        const q = dlpSearch.trim().toLowerCase();
+        const filteredRules = dlpRules.filter((r) => {
+          if (dlpCategory !== 'All' && r.category !== dlpCategory) return false;
+          if (!q) return true;
+          return (
+            r.name.toLowerCase().includes(q) ||
+            r.category.toLowerCase().includes(q) ||
+            r.replacement.toLowerCase().includes(q) ||
+            r.description.toLowerCase().includes(q) ||
+            r.example.toLowerCase().includes(q)
+          );
+        });
+
+        const catBadge = (cat) => {
+          if (cat === 'Secrets & Tokens') return 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30';
+          if (cat === 'PII & Financial') return 'bg-rose-500/15 text-rose-300 border-rose-500/30';
+          return 'bg-sky-500/15 text-sky-300 border-sky-500/30';
+        };
+
+        return (
+          <div className="space-y-5 text-xs">
+            {/* Live DLP Redaction Tester */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3.5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <FlaskConical className="w-4 h-4 text-indigo-400" />
+                    Live SMS Redaction Tester
+                  </h3>
+                  <p className="text-slate-400 mt-0.5">
+                    Every outgoing SMS (webhooks, Alertmanager, URL &amp; cert monitors, and test alerts) is scrubbed through these rules before reaching Twilio.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDlpInput(DLP_SAMPLE_TEXT);
+                      handleRunDlpTest(DLP_SAMPLE_TEXT);
+                    }}
+                    className="h-7 px-2.5 rounded-[5px] bg-slate-800 hover:bg-slate-700 text-slate-200 inline-flex items-center gap-1.5 text-xs font-medium"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    Load Sample
+                  </button>
+                  {dlpInput && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDlpInput('');
+                        setDlpResult(null);
+                      }}
+                      className="h-7 px-2.5 rounded-[5px] border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 text-xs"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+                <div className="space-y-2">
+                  <label className="block text-[11px] font-medium text-slate-400">
+                    Test Input String
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={dlpInput}
+                    onChange={(e) => setDlpInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                        e.preventDefault();
+                        handleRunDlpTest();
+                      }
+                    }}
+                    placeholder="Paste any alert message, log line, or payload to test redaction (Ctrl+Enter to run)..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2.5 font-mono text-xs text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                  />
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-slate-500">
+                      Runs the exact backend <code className="text-slate-300">dlp.py</code> scrubber — nothing is logged or sent.
+                    </span>
+                    <button
+                      type="button"
+                      disabled={dlpTesting || !dlpInput.trim()}
+                      onClick={() => handleRunDlpTest()}
+                      className="h-7 px-3 rounded-[5px] bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-medium text-xs whitespace-nowrap shrink-0 transition-colors"
+                    >
+                      {dlpTesting ? 'Testing...' : 'Test Redaction'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[11px] font-medium text-slate-400">
+                      Redacted SMS Output
+                    </label>
+                    {dlpResult && (
+                      dlpResult.total_redactions > 0 ? (
+                        <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-medium tabular-nums">
+                          {dlpResult.total_redactions} redaction{dlpResult.total_redactions === 1 ? '' : 's'} across {dlpResult.matched_rules.length} rule{dlpResult.matched_rules.length === 1 ? '' : 's'}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-medium">
+                          Clean — no sensitive data matched
+                        </span>
+                      )
+                    )}
+                  </div>
+                  <div className="min-h-[118px] bg-slate-950 border border-slate-800 rounded-lg px-3 py-2.5 font-mono text-xs text-slate-200 leading-relaxed whitespace-pre-wrap break-words">
+                    {dlpResult ? (
+                      renderHighlightedRedacted(dlpResult.redacted)
+                    ) : (
+                      <span className="text-slate-600">
+                        Redacted preview will appear here after running a test...
+                      </span>
+                    )}
+                  </div>
+                  {dlpResult?.matched_rules?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {dlpResult.matched_rules.map((mr) => (
+                        <span
+                          key={mr.id}
+                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-[11px] ${catBadge(mr.category)}`}
+                        >
+                          <span>{mr.name}</span>
+                          <span className="font-mono font-semibold opacity-80">×{mr.matches}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Active Scrubbing Rules Table */}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div
+                  role="tablist"
+                  aria-label="DLP rule category filter"
+                  className="inline-flex items-center gap-0.5 p-0.5 rounded-md border border-slate-800 bg-slate-900"
+                >
+                  {categories.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      role="tab"
+                      aria-selected={dlpCategory === cat}
+                      onClick={() => setDlpCategory(cat)}
+                      className={`h-[26px] px-2.5 rounded-[4px] inline-flex items-center gap-1.5 text-[11.5px] transition-colors ${
+                        dlpCategory === cat
+                          ? 'bg-slate-800 text-slate-100 font-semibold'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 font-medium'
+                      }`}
+                    >
+                      <span>{cat === 'All' ? 'All Rules' : cat}</span>
+                      <span className="text-[10px] font-semibold tabular-nums text-slate-400">
+                        {countsByCat[cat]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative w-full sm:w-72">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    value={dlpSearch}
+                    onChange={(e) => setDlpSearch(e.target.value)}
+                    placeholder="Filter rules, tags, or examples..."
+                    className="w-full h-7 bg-slate-900 border border-slate-800 rounded-[5px] pl-8 pr-7 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                  {dlpSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setDlpSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="border border-slate-800 rounded-lg bg-slate-900 overflow-x-auto">
+                <table className="w-full table-fixed min-w-[780px] text-left border-collapse">
+                  <colgroup>
+                    <col className="w-[22%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[18%]" />
+                    <col className="w-[27%]" />
+                    <col className="w-[18%]" />
+                  </colgroup>
+                  <thead className="bg-slate-950/55 text-[11.5px] text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="py-2 px-3 font-normal whitespace-nowrap">Rule</th>
+                      <th className="py-2 px-3 font-normal whitespace-nowrap">Category</th>
+                      <th className="py-2 px-3 font-normal whitespace-nowrap">Replacement</th>
+                      <th className="py-2 px-3 font-normal">What It Catches</th>
+                      <th className="py-2 px-3 font-normal whitespace-nowrap">Example</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {filteredRules.map((r) => (
+                      <tr key={r.id} className="hover:bg-slate-800/35 transition-colors">
+                        <td className="py-2.5 px-3 font-medium text-slate-100 truncate" title={r.name}>
+                          {r.name}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-[5px] border text-[11px] font-medium ${catBadge(r.category)}`}>
+                            {r.category}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <code className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-[11px]">
+                            {r.replacement}
+                          </code>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-300">
+                          {r.description}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-[11px] text-slate-400 truncate" title={r.example}>
+                          {r.example}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredRules.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-slate-500">
+                          No scrubbing rules match "{dlpSearch}".
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* DATABASE & RETENTION */}
       {subTab === 'database' && dbInfo && (
