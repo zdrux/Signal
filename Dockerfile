@@ -3,6 +3,7 @@
 # ==============================================================================
 FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS frontend-builder
 
+USER 0
 WORKDIR /build/frontend
 
 COPY frontend/package*.json frontend/.npmrc ./
