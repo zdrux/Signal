@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, ShieldCheck, Plus, Play, Trash2, X, AlertTriangle, Pencil, Clock, ListPlus } from 'lucide-react';
+import { Globe, ShieldCheck, Plus, Play, Trash2, X, AlertTriangle, Pencil, Clock, ListPlus, Search, ArrowUpDown } from 'lucide-react';
 import { api } from '../api';
 
 function formatLastChecked(iso) {
@@ -108,6 +108,8 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
 
   const [showCertModal, setShowCertModal] = useState(false);
   const [editingCert, setEditingCert] = useState(null);
+  const [certFilter, setCertFilter] = useState('');
+  const [certSort, setCertSort] = useState({ key: 'days_remaining', dir: 'asc' });
 
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [checkingKey, setCheckingKey] = useState(null);
@@ -402,89 +404,191 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
           </div>
         )}
 
-        {/* CERTIFICATE EXPIRY MONITORS */}
-        {showCert && (
-          <div className={mode === 'all' ? 'space-y-2.5' : 'bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3.5'}>
-            <div className="flex items-center justify-between">
-              <div className="text-slate-200 font-semibold flex items-center gap-1.5 text-sm">
-                <ShieldCheck className="w-4 h-4 text-amber-400" />
-                Certificate Expiry Monitors ({certMonitors.length})
-              </div>
-              <button
-                onClick={() => setShowCertModal(true)}
-                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white flex items-center gap-1 text-xs font-medium"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add Cert(s)
-              </button>
-            </div>
+        {/* CERTIFICATE EXPIRY MONITORS (SORTABLE, FILTERABLE TABLE) */}
+        {showCert && (() => {
+          const toggleSort = (key) => {
+            setCertSort((prev) =>
+              prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }
+            );
+          };
 
-            <div className="space-y-2">
-              {certMonitors.map((m) => (
-                <div key={m.id} className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-mono text-slate-200 truncate">{m.url}</span>
-                        <CertStatusPill m={m} />
-                      </div>
-                      {m.last_error && <div className="text-[11px] text-amber-400 truncate mt-0.5">{m.last_error}</div>}
-                    </div>
-                    <div className="flex items-center gap-2.5 shrink-0">
-                      <button
-                        disabled={checkingKey === `cert-${m.id}`}
-                        onClick={() => handleCheckCert(m)}
-                        title="Check certificate now"
-                        className="p-1 rounded hover:bg-slate-800 text-sky-400 hover:text-sky-300 disabled:opacity-40"
-                      >
-                        <Play className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => setEditingCert({ ...m })}
-                        title="Edit threshold / interval"
-                        className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </button>
-                      <ToggleSwitch
-                        enabled={m.enabled}
-                        onToggle={async () => { await api.updateCertMonitor(app.id, m.id, { enabled: !m.enabled }); onRefresh(); }}
-                      />
-                      <button
-                        onClick={() =>
-                          setConfirmDelete({
-                            title: 'Delete Certificate Monitor',
-                            message: `Are you sure you want to delete the certificate expiry monitor for "${m.url}"?`,
-                            onConfirm: async () => {
-                              await api.deleteCertMonitor(app.id, m.id);
-                              onToast('Certificate monitor deleted');
-                              onRefresh();
-                            },
-                          })
-                        }
-                        title="Delete monitor"
-                        className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-red-400"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 font-mono">
-                    <div>
-                      alert &le; {m.days_before_expiry}d · every {Math.round(m.interval_seconds / 60)}m
-                      {m.cert_expires_at ? ` · exp ${m.cert_expires_at.slice(0, 10)}` : ''}
-                    </div>
-                    <div className="flex items-center gap-1 text-slate-400" title={m.last_checked_at ? new Date(m.last_checked_at).toLocaleString() : 'Never checked'}>
-                      <Clock className="w-3 h-3" /> Last checked: {formatLastChecked(m.last_checked_at)}
-                    </div>
-                  </div>
+          const q = certFilter.trim().toLowerCase();
+          const filteredCerts = q
+            ? certMonitors.filter(
+                (m) =>
+                  (m.url || '').toLowerCase().includes(q) ||
+                  (m.last_status || '').toLowerCase().includes(q) ||
+                  (m.last_error || '').toLowerCase().includes(q) ||
+                  (m.cert_expires_at || '').toLowerCase().includes(q)
+              )
+            : certMonitors;
+
+          const sortedCerts = [...filteredCerts].sort((a, b) => {
+            const dir = certSort.dir === 'asc' ? 1 : -1;
+            const k = certSort.key;
+            let av = a[k];
+            let bv = b[k];
+            if (k === 'days_remaining' || k === 'days_before_expiry') {
+              const an = av === null || av === undefined ? Number.POSITIVE_INFINITY : Number(av);
+              const bn = bv === null || bv === undefined ? Number.POSITIVE_INFINITY : Number(bv);
+              return (an - bn) * dir;
+            }
+            if (k === 'cert_expires_at' || k === 'last_checked_at') {
+              const at = av ? new Date(av).getTime() : Number.POSITIVE_INFINITY;
+              const bt = bv ? new Date(bv).getTime() : Number.POSITIVE_INFINITY;
+              return (at - bt) * dir;
+            }
+            return String(av || '').localeCompare(String(bv || '')) * dir;
+          });
+
+          const SortHeader = ({ colKey, label }) => (
+            <th
+              onClick={() => toggleSort(colKey)}
+              className="py-2.5 px-3 font-medium cursor-pointer select-none hover:text-slate-200 whitespace-nowrap"
+            >
+              <span className="inline-flex items-center gap-1">
+                {label}
+                <ArrowUpDown className={`w-3 h-3 ${certSort.key === colKey ? 'text-indigo-400' : 'text-slate-600'}`} />
+                {certSort.key === colKey && (
+                  <span className="text-[10px] text-indigo-400">{certSort.dir === 'asc' ? '▲' : '▼'}</span>
+                )}
+              </span>
+            </th>
+          );
+
+          return (
+            <div className={mode === 'all' ? 'space-y-2.5' : 'bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4'}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-slate-200 font-semibold flex items-center gap-1.5 text-sm">
+                  <ShieldCheck className="w-4 h-4 text-amber-400" />
+                  Certificate Expiry Monitors ({certMonitors.length})
                 </div>
-              ))}
-              {certMonitors.length === 0 && (
-                <div className="text-slate-500 py-4 text-center">No certificate expiry monitors configured.</div>
-              )}
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="relative w-64">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      value={certFilter}
+                      onChange={(e) => setCertFilter(e.target.value)}
+                      placeholder="Filter URL, status, or expiry..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setShowCertModal(true)}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white flex items-center gap-1 text-xs font-medium"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Add Cert(s)
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-lg overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-900/70 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <SortHeader colKey="url" label="Endpoint URL" />
+                      <SortHeader colKey="last_status" label="Status" />
+                      <SortHeader colKey="days_remaining" label="Remaining Days" />
+                      <SortHeader colKey="cert_expires_at" label="Expires On" />
+                      <SortHeader colKey="days_before_expiry" label="Threshold" />
+                      <SortHeader colKey="last_checked_at" label="Last Checked" />
+                      <th className="py-2.5 px-3 font-medium text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {sortedCerts.map((m) => {
+                      const daysColor =
+                        m.days_remaining === null || m.days_remaining === undefined
+                          ? 'text-slate-500'
+                          : m.days_remaining <= 0
+                          ? 'text-red-400 font-semibold'
+                          : m.days_remaining <= m.days_before_expiry
+                          ? 'text-amber-400 font-semibold'
+                          : 'text-emerald-400 font-medium';
+                      return (
+                        <tr key={m.id} className="hover:bg-slate-900/50">
+                          <td className="py-2.5 px-3 max-w-xs">
+                            <div className="font-mono text-slate-200 truncate" title={m.url}>{m.url}</div>
+                            {m.last_error && (
+                              <div className="text-[11px] text-amber-400 truncate mt-0.5" title={m.last_error}>{m.last_error}</div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <CertStatusPill m={m} />
+                          </td>
+                          <td className={`py-2.5 px-3 font-mono whitespace-nowrap ${daysColor}`}>
+                            {m.days_remaining !== null && m.days_remaining !== undefined ? `${m.days_remaining}d` : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-slate-300 whitespace-nowrap">
+                            {m.cert_expires_at ? m.cert_expires_at.slice(0, 10) : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-slate-400 whitespace-nowrap">
+                            &le; {m.days_before_expiry}d · {Math.round(m.interval_seconds / 60)}m
+                          </td>
+                          <td
+                            className="py-2.5 px-3 font-mono text-slate-400 whitespace-nowrap"
+                            title={m.last_checked_at ? new Date(m.last_checked_at).toLocaleString() : 'Never checked'}
+                          >
+                            {formatLastChecked(m.last_checked_at)}
+                          </td>
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                disabled={checkingKey === `cert-${m.id}`}
+                                onClick={() => handleCheckCert(m)}
+                                title="Check certificate now"
+                                className="p-1 rounded hover:bg-slate-800 text-sky-400 hover:text-sky-300 disabled:opacity-40"
+                              >
+                                <Play className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => setEditingCert({ ...m })}
+                                title="Edit threshold / interval"
+                                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <ToggleSwitch
+                                enabled={m.enabled}
+                                onToggle={async () => { await api.updateCertMonitor(app.id, m.id, { enabled: !m.enabled }); onRefresh(); }}
+                              />
+                              <button
+                                onClick={() =>
+                                  setConfirmDelete({
+                                    title: 'Delete Certificate Monitor',
+                                    message: `Are you sure you want to delete the certificate expiry monitor for "${m.url}"?`,
+                                    onConfirm: async () => {
+                                      await api.deleteCertMonitor(app.id, m.id);
+                                      onToast('Certificate monitor deleted');
+                                      onRefresh();
+                                    },
+                                  })
+                                }
+                                title="Delete monitor"
+                                className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-red-400"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {sortedCerts.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-slate-500">
+                          {certMonitors.length === 0
+                            ? 'No certificate expiry monitors configured.'
+                            : `No certificate monitors match "${certFilter}".`}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* ADD / EDIT URL MONITOR MODAL */}
