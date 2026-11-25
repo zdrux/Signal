@@ -15,7 +15,8 @@ router = APIRouter(prefix="/api/apps", tags=["monitors"])
 
 class CreateUrlMonitorRequest(BaseModel):
     name: str = ""
-    url: str
+    url: str = ""
+    urls: list[str] = []
     method: str = "GET"
     auth_type: str = "none"  # none, bearer, basic
     auth_username: str = ""
@@ -82,9 +83,16 @@ def create_url_monitor(
         raise HTTPException(status_code=404, detail="Application not found")
     assert_can_manage_app(session, actor, app_id)
 
-    url = payload.url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    raw_urls = [u.strip() for u in (payload.urls or []) if u and u.strip()]
+    if not raw_urls and payload.url.strip():
+        raw_urls = [payload.url.strip()]
+    if not raw_urls:
+        raise HTTPException(status_code=400, detail="Provide at least one target URL")
+
+    for u in raw_urls:
+        if not u.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail=f"URL must start with http:// or https:// ({u})")
+
     if payload.auth_type not in ("none", "bearer", "basic"):
         raise HTTPException(status_code=400, detail="auth_type must be none, bearer, or basic")
     body_mode = (payload.expected_body_mode or "contains").strip().lower()
@@ -97,29 +105,42 @@ def create_url_monitor(
             raise HTTPException(status_code=400, detail=f"Invalid regex pattern: {exc}")
     headers_json = _validate_headers_json(payload.headers_json)
 
-    monitor = UrlMonitor(
-        app_id=app_id,
-        name=payload.name.strip(),
-        url=url,
-        method=(payload.method or "GET").strip().upper(),
-        auth_type=payload.auth_type,
-        auth_username=payload.auth_username.strip(),
-        auth_secret=payload.auth_secret.strip(),
-        headers_json=headers_json,
-        expected_status=max(0, payload.expected_status),
-        expected_body=payload.expected_body,
-        expected_body_mode=body_mode,
-        interval_seconds=max(30, payload.interval_seconds),
-        timeout_seconds=max(2, min(60, payload.timeout_seconds)),
-        max_latency_ms=max(0, payload.max_latency_ms),
-        enabled=True,
-        created_by=actor.username,
-    )
-    session.add(monitor)
+    created = []
+    for u in raw_urls:
+        monitor = UrlMonitor(
+            app_id=app_id,
+            name=payload.name.strip() if len(raw_urls) == 1 else "",
+            url=u,
+            method=(payload.method or "GET").strip().upper(),
+            auth_type=payload.auth_type,
+            auth_username=payload.auth_username.strip(),
+            auth_secret=payload.auth_secret.strip(),
+            headers_json=headers_json,
+            expected_status=max(0, payload.expected_status),
+            expected_body=payload.expected_body,
+            expected_body_mode=body_mode,
+            interval_seconds=max(30, payload.interval_seconds),
+            timeout_seconds=max(2, min(60, payload.timeout_seconds)),
+            max_latency_ms=max(0, payload.max_latency_ms),
+            enabled=True,
+            created_by=actor.username,
+        )
+        session.add(monitor)
+        session.flush()
+        created.append({"id": monitor.id, "url": monitor.url})
+
     session.commit()
-    session.refresh(monitor)
-    record_audit(session, actor.username, "URL_MONITOR_CREATED", target=f"{app.name}:{monitor.url}")
-    return {"id": monitor.id, "url": monitor.url}
+    if len(created) == 1:
+        record_audit(session, actor.username, "URL_MONITOR_CREATED", target=f"{app.name} (MAP {app.map_id}) · {created[0]['url']}")
+    else:
+        record_audit(
+            session,
+            actor.username,
+            "URL_MONITORS_CREATED",
+            target=f"{app.name} (MAP {app.map_id}) ({len(created)} URLs)",
+            details=f"method={(payload.method or 'GET').upper()}, interval={max(30, payload.interval_seconds)}s",
+        )
+    return {"id": created[0]["id"], "url": created[0]["url"], "created": created, "count": len(created)}
 
 
 @router.patch("/{app_id}/url-monitors/{monitor_id}")

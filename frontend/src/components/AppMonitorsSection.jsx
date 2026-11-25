@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, ShieldCheck, Plus, Play, Trash2, X, AlertTriangle, Pencil, Clock } from 'lucide-react';
+import { Globe, ShieldCheck, Plus, Play, Trash2, X, AlertTriangle, Pencil, Clock, ListPlus } from 'lucide-react';
 import { api } from '../api';
 
 function formatLastChecked(iso) {
@@ -102,6 +102,9 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
   const [showUrlModal, setShowUrlModal] = useState(false);
   const [editingUrlId, setEditingUrlId] = useState(null);
   const [editingUrlHasSecret, setEditingUrlHasSecret] = useState(false);
+  const [showBatchUrlModal, setShowBatchUrlModal] = useState(false);
+  const [batchUrlText, setBatchUrlText] = useState('');
+  const [batchUrls, setBatchUrls] = useState([]);
 
   const [showCertModal, setShowCertModal] = useState(false);
   const [editingCert, setEditingCert] = useState(null);
@@ -145,6 +148,8 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
     setEditingUrlId(null);
     setEditingUrlHasSecret(false);
     setUrlForm(EMPTY_URL_FORM);
+    setBatchUrls([]);
+    setBatchUrlText('');
     setHeaderRows([{ key: '', value: '' }]);
     setHeaderMode('kv');
     setShowUrlModal(true);
@@ -153,6 +158,8 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
   function openEditUrlModal(m) {
     setEditingUrlId(m.id);
     setEditingUrlHasSecret(!!m.has_auth_secret);
+    setBatchUrls([]);
+    setBatchUrlText('');
     setUrlForm({
       name: m.name || '',
       url: m.url || '',
@@ -207,11 +214,16 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
         await api.updateUrlMonitor(app.id, editingUrlId, body);
         onToast('URL monitor updated');
       } else {
-        await api.createUrlMonitor(app.id, body);
-        onToast('URL monitor added');
+        const res = await api.createUrlMonitor(app.id, {
+          ...body,
+          urls: batchUrls.length ? batchUrls : undefined,
+        });
+        onToast(res.count > 1 ? `Added ${res.count} URL monitors` : 'URL monitor added');
       }
       setShowUrlModal(false);
       setEditingUrlId(null);
+      setBatchUrls([]);
+      setBatchUrlText('');
       onRefresh();
     } catch (err) {
       onToast(err.message, true);
@@ -501,8 +513,44 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
               </div>
             </div>
             <div>
-              <label className="block text-slate-400 mb-1">Target URL</label>
-              <input required value={urlForm.url} onChange={(e) => setUrlForm({ ...urlForm, url: e.target.value })} placeholder="https://payments.corp.internal/healthz" className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-white" />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-slate-400">Target URL</label>
+                {!editingUrlId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBatchUrlText(batchUrls.join('\n'));
+                      setShowBatchUrlModal(true);
+                    }}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                  >
+                    <ListPlus className="w-3.5 h-3.5" />
+                    {batchUrls.length ? `Edit Batch (${batchUrls.length} URLs)` : 'Paste Batch URLs'}
+                  </button>
+                )}
+              </div>
+              {batchUrls.length > 0 && !editingUrlId ? (
+                <div className="bg-indigo-950/40 border border-indigo-500/40 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-indigo-200 font-medium">
+                      {batchUrls.length} URLs queued — all settings below will apply to each entry
+                    </div>
+                    <div className="font-mono text-[11px] text-slate-400 truncate mt-0.5">
+                      {batchUrls.slice(0, 3).join(', ')}{batchUrls.length > 3 ? ` +${batchUrls.length - 3} more` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setBatchUrls([]); setBatchUrlText(''); }}
+                    className="text-slate-400 hover:text-red-400 shrink-0"
+                    title="Clear batch list"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <input required value={urlForm.url} onChange={(e) => setUrlForm({ ...urlForm, url: e.target.value })} placeholder="https://payments.corp.internal/healthz" className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-white" />
+              )}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div>
@@ -659,10 +707,59 @@ export default function AppMonitorsSection({ app, mode = 'all', onRefresh, onToa
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={() => setShowUrlModal(false)} className="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-300">Cancel</button>
               <button type="submit" className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white font-medium">
-                {editingUrlId ? 'Save Changes' : 'Add URL Monitor'}
+                {editingUrlId ? 'Save Changes' : batchUrls.length > 1 ? `Add ${batchUrls.length} URL Monitors` : 'Add URL Monitor'}
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* BATCH URL PASTE POPUP MODAL */}
+      {showBatchUrlModal && (
+        <div className="fixed inset-0 z-[60] bg-black/75 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-xl max-w-lg w-full p-5 space-y-3.5 text-xs shadow-2xl">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <ListPlus className="w-4 h-4 text-indigo-400" />
+                Paste Batch URLs
+              </h3>
+              <button type="button" onClick={() => setShowBatchUrlModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-slate-400">
+              Paste one URL per line (must start with <code className="text-slate-200">http://</code> or <code className="text-slate-200">https://</code>). Individual monitor entries will be created using the settings in the URL Monitor form.
+            </p>
+            <textarea
+              rows={6}
+              autoFocus
+              value={batchUrlText}
+              onChange={(e) => setBatchUrlText(e.target.value)}
+              placeholder={"https://service-a.corp.internal/healthz\nhttps://service-b.corp.internal/healthz\nhttps://service-c.corp.internal/healthz"}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 font-mono text-white"
+            />
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-slate-400 font-mono">
+                {batchUrlText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).length} URL(s) detected
+              </span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setShowBatchUrlModal(false)} className="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-300">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parsed = batchUrlText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+                    setBatchUrls(parsed);
+                    setShowBatchUrlModal(false);
+                  }}
+                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium"
+                >
+                  Apply URLs
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

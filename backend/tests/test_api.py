@@ -194,6 +194,18 @@ def test_direct_apps_alertmanager_dedupe_and_flood_protection():
         with patch("app.services.monitors.requests.request", return_value=_FakeResp(200, '{"status": "UP"}')):
             assert client.post(f"/api/apps/{app_id}/url-monitors/{rx_id}/check").json()["status"] == "ok"
 
+        # Batch-create 2 URL monitors with shared settings
+        um_batch = client.post(
+            f"/api/apps/{app_id}/url-monitors",
+            json={
+                "urls": ["https://svc1.internal/health", "https://svc2.internal/health"],
+                "expected_status": 200,
+                "max_latency_ms": 1500,
+            },
+        )
+        assert um_batch.status_code == 200
+        assert um_batch.json()["count"] == 2
+
         # Batch-create 2 Certificate Expiry monitors
         cm_batch = client.post(
             f"/api/apps/{app_id}/cert-monitors",
