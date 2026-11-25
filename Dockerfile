@@ -6,8 +6,8 @@ FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS frontend-builder
 USER 0
 WORKDIR /build/frontend
 
-COPY frontend/package*.json frontend/.npmrc ./
-RUN npm ci --no-audit --no-fund && rm -f .npmrc
+COPY frontend/package.json frontend/.npmrc ./
+RUN npm install --no-audit --no-fund && rm -f .npmrc
 
 COPY frontend/ ./
 RUN npm run build
