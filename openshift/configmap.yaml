@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: signal-config
+data:
+  DATABASE_URL: "sqlite:////app/data/signal.db"
+  # Comma-separated initial admins (supports ad\username or username)
+  INITIAL_ADMINS: "ad\\admin"
+  # LDAPS pass-through bind (set LDAP_ENABLED to "true" once ready)
+  LDAP_ENABLED: "false"
+  LDAP_HOST: ""
+  LDAP_PORT: "636"
+  LDAP_USE_SSL: "true"
+  LDAP_USER_DOMAIN: "ad"
+  LDAP_AUTH_TYPE: "SIMPLE"
+  COOKIE_SECURE: "true"
+  # SQLite data retention (days; 0 = keep forever)
+  EVENT_RETENTION_DAYS: "90"
+  AUDIT_RETENTION_DAYS: "365"
+  # Optional: Public OpenShift Route URL (can also be set in Admin -> Base URL)
+  PUBLIC_BASE_URL: ""
