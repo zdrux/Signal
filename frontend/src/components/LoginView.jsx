@@ -36,7 +36,7 @@ export default function LoginView({ ldapDomain, onSuccess }) {
         </div>
 
         <p className="text-xs text-slate-400 mb-5">
-          Sign in with your Active Directory credentials ({ldapDomain ? `${ldapDomain}\\username` : 'username'}).
+          Sign in with your Active Directory username and password.
         </p>
 
         {error && (
@@ -49,15 +49,22 @@ export default function LoginView({ ldapDomain, onSuccess }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs text-slate-400 mb-1">AD Username</label>
-            <input
-              type="text"
-              required
-              autoFocus
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder={ldapDomain ? `${ldapDomain}\\jdoe or jdoe` : 'jdoe'}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-            />
+            <div className="flex items-stretch rounded-lg border border-slate-800 bg-slate-950 focus-within:border-indigo-500 overflow-hidden">
+              {ldapDomain && (
+                <span className="px-3 py-2 bg-slate-900 border-r border-slate-800 text-sm font-mono text-slate-400 select-none flex items-center">
+                  {ldapDomain}\
+                </span>
+              )}
+              <input
+                type="text"
+                required
+                autoFocus
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="jdoe"
+                className="flex-1 bg-transparent px-3 py-2 text-sm text-white focus:outline-none"
+              />
+            </div>
           </div>
           <div>
             <label className="block text-xs text-slate-400 mb-1">Password</label>
